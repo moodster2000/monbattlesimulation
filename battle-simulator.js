@@ -4,11 +4,24 @@ const rl = readline.createInterface({
   output: process.stdout
 });
 
+class Move {
+  constructor(name, type, power, category, usageLimit = Infinity) {
+    this.name = name;
+    this.type = type;
+    this.power = power;
+    this.category = category; // 'damage', 'stat', 'mega'
+    this.usageLimit = usageLimit;
+    this.usesLeft = usageLimit;
+    this.statEffect = null;
+  }
+}
+
 class Mon {
   constructor(name, type) {
     this.name = name;
     this.type = type;
     this.stats = this.generateStats();
+    this.currentStats = { ...this.stats }; // For tracking stat changes
     this.moves = this.generateMoves();
     this.currentHealth = this.stats.health;
   }
@@ -25,49 +38,50 @@ class Mon {
   generateMoves() {
     const movePool = {
       water: [
-        { name: 'Aqua Blast', power: 45 },
         { name: 'Hydro Pump', power: 55 },
-        { name: 'Water Whip', power: 40 },
-        { name: 'Bubble Beam', power: 50 }
+        { name: 'Aqua Blast', power: 50 },
+        { name: 'Tidal Wave', power: 85, category: 'mega' }
       ],
       fire: [
-        { name: 'Flame Thrower', power: 50 },
         { name: 'Fire Blast', power: 55 },
-        { name: 'Ember', power: 40 },
-        { name: 'Heat Wave', power: 45 }
+        { name: 'Flame Thrower', power: 50 },
+        { name: 'Inferno', power: 85, category: 'mega' }
       ],
       grass: [
-        { name: 'Leaf Strike', power: 45 },
         { name: 'Solar Beam', power: 55 },
-        { name: 'Root Bind', power: 40 },
-        { name: 'Vine Whip', power: 50 }
+        { name: 'Leaf Storm', power: 50 },
+        { name: 'Frenzy Plant', power: 85, category: 'mega' }
       ],
       normal: [
-        { name: 'Quick Attack', power: 45 },
         { name: 'Tackle', power: 50 },
-        { name: 'Slam', power: 55 },
-        { name: 'Body Slam', power: 40 }
+        { name: 'Body Slam', power: 55 }
+      ],
+      stat: [
+        { name: 'Defense Break', statEffect: { stat: 'defense', multiplier: 0.8 }},
+        { name: 'Power Down', statEffect: { stat: 'attack', multiplier: 0.8 }}
       ]
     };
-  
+
     const moves = [];
     
-    // Get one move of mon's type
-    const typeMove = movePool[this.type][Math.floor(Math.random() * movePool[this.type].length)];
-    moves.push({
-      name: typeMove.name,
-      type: this.type,
-      power: typeMove.power
-    });
-  
-    // Get one normal move
+    // 1. Type-specific move
+    const typeMove = movePool[this.type][Math.floor(Math.random() * (movePool[this.type].length - 1))];
+    moves.push(new Move(typeMove.name, this.type, typeMove.power, 'damage'));
+
+    // 2. Normal move
     const normalMove = movePool.normal[Math.floor(Math.random() * movePool.normal.length)];
-    moves.push({
-      name: normalMove.name,
-      type: 'normal',
-      power: normalMove.power
-    });
-    
+    moves.push(new Move(normalMove.name, 'normal', normalMove.power, 'damage'));
+
+    // 3. Stat move
+    const statMove = movePool.stat[Math.floor(Math.random() * movePool.stat.length)];
+    const statMoveObj = new Move(statMove.name, 'normal', 0, 'stat');
+    statMoveObj.statEffect = statMove.statEffect;
+    moves.push(statMoveObj);
+
+    // 4. Mega move
+    const megaMove = movePool[this.type][movePool[this.type].length - 1];
+    moves.push(new Move(megaMove.name, this.type, megaMove.power, 'mega', 1));
+
     return moves;
   }
 }
@@ -80,7 +94,6 @@ class Battle {
   }
 
   getTypeMultiplier(moveType, defenderType) {
-    // If it's a normal move, it has no type advantages
     if (moveType === 'normal') return 1.0;
     
     const effectiveness = {
@@ -92,15 +105,14 @@ class Battle {
   }
 
   calculateDamage(attacker, defender, move) {
-    // New balanced damage formula:
-    // Base damage is 15-20% of defender's max health for a neutral hit
-    
+    if (move.category === 'stat') return 0;
+
     const typeMultiplier = this.getTypeMultiplier(move.type, defender.type);
-    const randomMultiplier = (Math.random() * 0.15) + 0.85; // 0.85-1.0
-    const attackDefenseRatio = attacker.stats.attack / defender.stats.defense;
-    const movePowerFactor = move.power / 50; // Normalize move power around 50
+    const randomMultiplier = (Math.random() * 0.15) + 0.85;
+    const attackDefenseRatio = attacker.currentStats.attack / defender.currentStats.defense;
+    const movePowerFactor = move.power / 50;
     
-    const baseDamage = (defender.stats.health * 0.15); // 15% of max health
+    const baseDamage = (defender.stats.health * 0.15);
     
     const finalDamage = Math.floor(
       baseDamage * 
@@ -121,15 +133,37 @@ class Battle {
     return Math.max(1, finalDamage);
   }
 
+  applyStatEffect(attacker, defender, move) {
+    if (move.category !== 'stat') return;
+
+    const stat = move.statEffect.stat;
+    const multiplier = move.statEffect.multiplier;
+    defender.currentStats[stat] = Math.floor(defender.currentStats[stat] * multiplier);
+
+    console.log(`\n${defender.name}'s ${stat} was reduced!`);
+    console.log(`${stat}: ${Math.floor(defender.stats[stat])} -> ${defender.currentStats[stat]}`);
+  }
+
   async executeTurn(move) {
     const attacker = this.currentTurn;
     const defender = this.currentTurn === this.mon1 ? this.mon2 : this.mon1;
+
+    if (move.usesLeft <= 0) {
+      console.log(`\n${move.name} cannot be used anymore!`);
+      return false;
+    }
+
+    move.usesLeft--;
     
-    const damage = this.calculateDamage(attacker, defender, move);
-    defender.currentHealth = Math.max(0, defender.currentHealth - damage);
-    
-    console.log(`\n${attacker.name} used ${move.name} and dealt ${damage} damage to ${defender.name}!`);
-    console.log(`${defender.name} has ${defender.currentHealth}/${defender.stats.health} health left.\n`);
+    if (move.category === 'stat') {
+      this.applyStatEffect(attacker, defender, move);
+    } else {
+      const damage = this.calculateDamage(attacker, defender, move);
+      defender.currentHealth = Math.max(0, defender.currentHealth - damage);
+      
+      console.log(`\n${attacker.name} used ${move.name} and dealt ${damage} damage to ${defender.name}!`);
+      console.log(`${defender.name} has ${defender.currentHealth}/${defender.stats.health} health left.`);
+    }
     
     this.currentTurn = defender;
     return defender.currentHealth === 0;
@@ -137,9 +171,10 @@ class Battle {
 
   async displayMoveOptions() {
     const mon = this.currentTurn;
-    console.log(`${mon.name}'s turn! Choose a move:`);
+    console.log(`\n${mon.name}'s turn! Choose a move:`);
     mon.moves.forEach((move, index) => {
-      console.log(`${index + 1}. ${move.name} (Power: ${move.power}, Type: ${move.type})`);
+      const usesLeft = move.usageLimit === Infinity ? '∞' : move.usesLeft;
+      console.log(`${index + 1}. ${move.name} (Power: ${move.power}, Type: ${move.type}, Uses left: ${usesLeft})`);
     });
   }
 }
